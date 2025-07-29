@@ -20,7 +20,7 @@ if not TELEGRAM_TOKEN:
     raise RuntimeError("No se encontró TELEGRAM_BOT_TOKEN en .env")
 
 # URL del backend
-BACKEND_URL = "https://telegrambot-eljv.onrender.com"
+BACKEND_URL = "https://telegrambot-eljv.onrender.com/process-file"
 
 # Estados de conversación
 WAITING_CONFIRMATION = 1
