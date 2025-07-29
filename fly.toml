@@ -1,0 +1,10 @@
+app = "telegrambot"
+
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Proceso principal: solo corre el bot
+[processes]
+  app = "python bot.py"
