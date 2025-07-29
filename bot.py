@@ -155,24 +155,36 @@ async def confirm_overwrite(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     print("Iniciando Telegram Bot...")
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    conv_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Document.ALL, handle_file)],
-        states={
-            WAITING_CONFIRMATION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_overwrite)
-            ]
-        },
-        fallbacks=[CommandHandler("start", start)],
-        per_chat=True,  # Cada chat mantiene su propio flujo
-        per_message=False,
-    )
+    async def run():
+        app = (
+            Application.builder()
+            .token(TELEGRAM_TOKEN)
+            .build()
+        )
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(conv_handler)
+        conv_handler = ConversationHandler(
+            entry_points=[MessageHandler(filters.Document.ALL, handle_file)],
+            states={
+                WAITING_CONFIRMATION: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_overwrite)
+                ]
+            },
+            fallbacks=[CommandHandler("start", start)],
+            per_chat=True,
+            per_message=False,
+        )
 
-    app.run_polling()
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(conv_handler)
+
+        # Inicialización manual sin run_polling()
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling()
+        await app.updater.idle()
+
+    asyncio.run(run())
 
 
 if __name__ == "__main__":
