@@ -1,17 +1,20 @@
-# Usa Python 3.11 para evitar incompatibilidades
+# Usar explícitamente Python 3.11
 FROM python:3.11-slim
 
-# Configura el directorio de trabajo dentro del contenedor
+# Variables de entorno
+ENV PYTHONUNBUFFERED=1
+
+# Directorio de trabajo
 WORKDIR /app
 
-# Copia el archivo de dependencias
+# Copiar dependencias
 COPY requirements.txt .
 
-# Instala las dependencias
+# Instalar dependencias
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copia todo el contenido del proyecto
+# Copiar todo el proyecto
 COPY . .
 
-# Comando para ejecutar el bot
+# Comando que ejecutará el bot
 CMD ["python", "bot.py"]
