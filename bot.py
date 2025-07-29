@@ -2,7 +2,6 @@ from dotenv import load_dotenv
 import os
 import tempfile
 import requests
-import asyncio
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -24,7 +23,7 @@ BACKEND_URL = "https://telegrambot-eljv.onrender.com/process-file"
 
 # Estados de conversación
 WAITING_CONFIRMATION = 1
-pending_files = {}  # Archivos pendientes por chat
+pending_files = {}
 
 
 async def safe_delete(path: str):
@@ -37,6 +36,7 @@ async def safe_delete(path: str):
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mensaje de bienvenida"""
     await update.message.reply_text(
         "Bot operativo. Envía un archivo PDF o MP3 para subirlo.\n\n"
         "Si el archivo ya existe podrás responder con los botones:\n"
@@ -47,7 +47,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def upload_to_backend(file_path, file_name, overwrite=False):
-    """Función síncrona para subir archivos al backend."""
+    """Envía archivo al backend."""
     with open(file_path, "rb") as f:
         files = {"file": (file_name, f)}
         data = {"source": "bot"}
@@ -57,36 +57,40 @@ def upload_to_backend(file_path, file_name, overwrite=False):
 
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Procesa cada archivo recibido y lo sube al backend."""
+    """Recibe un archivo desde Telegram, lo guarda y lo envía al backend."""
     document = update.message.document
     await update.message.reply_text(f"📄 Recibí tu archivo: {document.file_name}\nProcesando...")
 
     temp_path = None
     try:
-        # Guardar archivo temporal
+        # Descargar a archivo temporal
         telegram_file = await document.get_file()
         suffix = os.path.splitext(document.file_name)[-1]
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             temp_path = tmp.name
         await telegram_file.download_to_drive(custom_path=temp_path)
 
-        # Subir al backend en hilo aparte
-        resp = await asyncio.to_thread(upload_to_backend, temp_path, document.file_name, False)
+        # Subida al backend (bloqueante, en hilo aparte)
+        from asyncio import to_thread
+        resp = await to_thread(upload_to_backend, temp_path, document.file_name, False)
 
         if resp.status_code == 200:
             result = resp.json()
             status = result.get("status")
 
-            # Caso de archivo duplicado
             if status == "duplicate":
-                # Guardamos este archivo en la lista de pendientes sin bloquear otros
+                # Guardamos archivo pendiente para preguntar acción
                 pending_files[update.effective_chat.id] = (temp_path, document.file_name)
 
                 keyboard = [["si", "pasar", "cancelar"]]
-                reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+                reply_markup = ReplyKeyboardMarkup(
+                    keyboard,
+                    one_time_keyboard=True,
+                    resize_keyboard=True
+                )
 
                 await update.message.reply_text(
-                    f"⚠️ El archivo ya existe en el sistema:\n{result.get('file_key')}\n\n"
+                    f"⚠️ El archivo ya existe:\n{result.get('file_key')}\n\n"
                     "¿Qué deseas hacer?",
                     reply_markup=reply_markup
                 )
@@ -110,7 +114,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def confirm_overwrite(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Gestiona qué hacer cuando un archivo está duplicado."""
+    """Gestión de archivos duplicados: sobrescribir, pasar o cancelar."""
     decision = update.message.text.strip().lower()
     chat_id = update.effective_chat.id
 
@@ -121,9 +125,10 @@ async def confirm_overwrite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_path, file_name = pending_files.pop(chat_id)
 
     try:
+        from asyncio import to_thread
         if decision == "si":
             await update.message.reply_text("Sobrescribiendo archivo, espera...")
-            resp = await asyncio.to_thread(upload_to_backend, file_path, file_name, True)
+            resp = await to_thread(upload_to_backend, file_path, file_name, True)
             if resp.status_code == 200:
                 await update.message.reply_text("✅ Archivo sobrescrito con éxito.")
             else:
@@ -132,16 +137,16 @@ async def confirm_overwrite(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
 
         elif decision == "pasar":
-            await update.message.reply_text("Archivo omitido. No se ha hecho nada.")
+            await update.message.reply_text("Archivo omitido.")
 
         elif decision == "cancelar":
             await update.message.reply_text("Operación cancelada.")
 
         else:
+            # Opción inválida → vuelve a preguntar
             await update.message.reply_text(
                 "Respuesta no válida. Usa los botones o escribe: si, pasar o cancelar."
             )
-            # Volvemos a dejarlo pendiente
             pending_files[chat_id] = (file_path, file_name)
             return WAITING_CONFIRMATION
 
@@ -156,35 +161,29 @@ async def confirm_overwrite(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     print("Iniciando Telegram Bot...")
 
-    async def run():
-        app = (
-            Application.builder()
-            .token(TELEGRAM_TOKEN)
-            .build()
-        )
+    app = (
+        Application.builder()
+        .token(TELEGRAM_TOKEN)
+        .build()
+    )
 
-        conv_handler = ConversationHandler(
-            entry_points=[MessageHandler(filters.Document.ALL, handle_file)],
-            states={
-                WAITING_CONFIRMATION: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_overwrite)
-                ]
-            },
-            fallbacks=[CommandHandler("start", start)],
-            per_chat=True,
-            per_message=False,
-        )
+    conv_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Document.ALL, handle_file)],
+        states={
+            WAITING_CONFIRMATION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_overwrite)
+            ]
+        },
+        fallbacks=[CommandHandler("start", start)],
+        per_chat=True,
+        per_message=False,
+    )
 
-        app.add_handler(CommandHandler("start", start))
-        app.add_handler(conv_handler)
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(conv_handler)
 
-        # Inicialización manual sin run_polling()
-        await app.initialize()
-        await app.start()
-        await app.updater.start_polling()
-        await app.updater.idle()
-
-    asyncio.run(run())
+    # La forma correcta en v20 (NO usar asyncio.run())
+    app.run_polling()
 
 
 if __name__ == "__main__":
